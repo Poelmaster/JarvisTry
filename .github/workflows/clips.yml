@@ -1,0 +1,33 @@
+name: Jarvis clip-keuring
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: jarvis-clips
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  keuring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Git klaarzetten
+        run: |
+          git config user.name "Jarvis"
+          git config user.email "jarvis@users.noreply.github.com"
+
+      - name: Clips keuren en posten
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+        run: python3 jarvis_clips.py
