@@ -388,6 +388,30 @@ def main():
             save_state(st)
             return 1
 
+    loop_min = float(os.getenv("JARVIS_LOOP_MIN", "0") or 0)
+    end_at = time.time() + loop_min * 60
+    first = True
+    while True:
+        found, status, bias = scan_once(st, token, chat_id, dry)
+        if manual and first and not found and not dry:
+            tg(token, "sendMessage", {"chat_id": chat_id, "parse_mode": "HTML", "text":
+               "🤖 <b>Jarvis draait.</b>\nBTC " + " · ".join(status) +
+               f"\nTrend 1h: {bias}\nGeen nieuwe sweep-setup op dit moment."})
+        first = False
+        save_state(st)
+        print(f"{datetime.now(TZ):%H:%M:%S} — {len(found)} nieuwe setup(s). Trend 1h: {bias}. " + " | ".join(status),
+              flush=True)
+        if time.time() >= end_at:
+            break
+        # wachten tot vlak na het sluiten van de volgende 5m-candle
+        nxt = (int(time.time()) // 300 + 1) * 300 + 8
+        if nxt >= end_at:
+            break
+        time.sleep(max(5, nxt - time.time()))
+    return 0
+
+
+def scan_once(st, token, chat_id, dry):
     bias = htf_bias()
     found, status = [], []
     for tf in [t.strip() for t in CONFIG["timeframes"] if t.strip()]:
@@ -411,17 +435,12 @@ def main():
         text = message(s, tf, source)
         print(text.replace("<b>", "").replace("</b>", ""), "\n")
         if not dry:
-            tg(token, "sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
+            try:
+                tg(token, "sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
+            except Exception as e:  # noqa: BLE001
+                print("Telegram-fout:", e)
         st.setdefault("sent", []).append(key)
-
-    if manual and not found and not dry:
-        tg(token, "sendMessage", {"chat_id": chat_id, "parse_mode": "HTML", "text":
-           "🤖 <b>Jarvis draait.</b>\nBTC " + " · ".join(status) +
-           f"\nTrend 1h: {bias}\nGeen nieuwe sweep-setup op dit moment."})
-
-    print(f"Klaar — {len(found)} nieuwe setup(s). Trend 1h: {bias}. " + " | ".join(status))
-    save_state(st)
-    return 0
+    return found, status, bias
 
 
 if __name__ == "__main__":
