@@ -2,8 +2,8 @@ name: Jarvis BTC-setups
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
+    - cron: "*/15 * * * *"   # start een nieuwe ronde; elke ronde scant 55 min lang, na elke 5m-candle
+  workflow_dispatch:         # knop "Run workflow" om zelf te testen
 
 concurrency:
   group: jarvis
@@ -12,11 +12,11 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 62
     steps:
       - uses: actions/checkout@v4
 
-      - name: Geheugen ophalen
+      - name: Geheugen ophalen (welke meldingen al verstuurd zijn)
         uses: actions/cache/restore@v4
         with:
           path: state.json
@@ -27,6 +27,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          JARVIS_LOOP_MIN: "55"
           JARVIS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
           JARVIS_RISK_USD: "20"
           JARVIS_TIMEFRAMES: "5m,15m"
