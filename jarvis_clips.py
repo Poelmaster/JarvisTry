@@ -17,6 +17,7 @@ Secrets in GitHub: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, (optioneel) IG_USER_ID, IG_
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -96,8 +97,8 @@ def load():
 def save(st):
     # oude afgehandelde clips opruimen (max 200 bewaren)
     items = sorted(st["clips"].items(), key=lambda kv: kv[1].get("t", 0))
-    done = [k for k, v in items if v["status"] in ("gepost", "weg", "fout")]
-    for k in done[:-150]:
+    done = [k for k, v in items if v["status"] in ("gepost", "weg", "fout", "herwerk", "klaar")]
+    for k in done[:-300]:
         st["clips"].pop(k, None)
     STATE.write_text(json.dumps(st, indent=1, ensure_ascii=False))
 
@@ -110,7 +111,13 @@ def card(c):
 
 
 BUTTONS = lambda key: [[{"text": "✅ Posten", "callback_data": f"ok:{key}"},
-                        {"text": "❌ Weg", "callback_data": f"no:{key}"}]]
+                        {"text": "❌ Weg", "callback_data": f"no:{key}"}],
+                       [{"text": "➕ Langer", "callback_data": f"lg:{key}"},
+                        {"text": "➖ Korter", "callback_data": f"kt:{key}"}]]
+REASONS = [("saai", "😴 Saai"), ("begin", "🐢 Slecht begin"), ("context", "🤷 Geen context"),
+           ("lang", "⏳ Te lang"), ("kort", "✂️ Te kort"), ("anders", "🙅 Andere reden")]
+REASON_BUTTONS = lambda key: [[{"text": lbl, "callback_data": f"r:{key}:{code}"} for code, lbl in REASONS[i:i + 3]]
+                              for i in (0, 3)]
 
 
 # ----------------------------------------------------------------------------
@@ -145,8 +152,13 @@ def on_message(st, m):
             return
         st["n"] = st.get("n", 0) + 1
         key = str(m["message_id"])
-        c = {"n": st["n"], "file_id": vid["file_id"], "caption": (m.get("caption") or "").strip(),
+        raw = (m.get("caption") or "").strip()
+        mcb = re.search(r"#cb:([\w-]+)", raw)
+        cap = re.sub(r"\s*#cb:[\w-]+", "", raw).strip()
+        c = {"n": st["n"], "file_id": vid["file_id"], "caption": cap,
              "status": "wacht", "t": int(time.time())}
+        if mcb:
+            c["cb"] = mcb.group(1)  # id van ClipBot, om te leren en opnieuw te knippen
         r = say(card(c), reply_to=m["message_id"], buttons=BUTTONS(key))
         c["card"] = (r.get("result") or {}).get("message_id")
         st["clips"][key] = c
@@ -173,21 +185,35 @@ def on_button(st, q):
     if str(q.get("message", {}).get("chat", {}).get("id")) != CHAT_ID:
         return
     data = q.get("data", "")
-    act, _, key = data.partition(":")
+    act, _, rest = data.partition(":")
+    key, _, code = rest.partition(":")
     c = st["clips"].get(key)
     try:
-        tg("answerCallbackQuery", callback_query_id=q["id"],
-           text="Komt in orde" if act == "ok" else "Weggegooid")
+        tg("answerCallbackQuery", callback_query_id=q["id"], text={
+            "ok": "Komt in orde", "no": "Weggegooid", "lg": "Wordt langer gemaakt",
+            "kt": "Wordt korter gemaakt", "r": "Genoteerd, ik leer ervan"}.get(act, "Ok"))
     except Exception:  # noqa: BLE001
         pass
+    if c and act == "r":  # reden bij afkeuren
+        c["reden"] = code
+        label = dict(REASONS).get(code, code)
+        edit(c["card"], f"🗑️ Clip #{c['n']} weggegooid. Reden: {label}\n<i>ClipBot houdt hier rekening mee.</i>")
+        return
     if not c or c["status"] != "wacht":
+        return
+    if act in ("lg", "kt"):
+        c["status"] = "herwerk"
+        c["herwerk"] = "langer" if act == "lg" else "korter"
+        tip = ("\n\nStart op je pc:  <code>python clipbot.py herwerk</code>" if c.get("cb")
+               else "\n\n(Deze clip komt niet van ClipBot, dus knip hem zelf opnieuw.)")
+        edit(c["card"], f"🔁 Clip #{c['n']} wordt {c['herwerk']} gemaakt.{tip}")
         return
     if act == "ok":
         c["status"] = "goedgekeurd"
         edit(c["card"], card(c).split("\n\n<i>")[0] + "\n\n⏳ <b>Goedgekeurd</b>, wordt gepost…")
     elif act == "no":
         c["status"] = "weg"
-        edit(c["card"], f"🗑️ Clip #{c['n']} weggegooid.")
+        edit(c["card"], f"🗑️ Clip #{c['n']} weggegooid. Waarom? (helpt ClipBot leren)", REASON_BUTTONS(key))
 
 
 # ----------------------------------------------------------------------------
