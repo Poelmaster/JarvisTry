@@ -57,11 +57,11 @@ def http(url, data=None, method=None, timeout=30):
             return {"ok": False, "error": {"message": f"HTTP {e.code}: {txt[:300]}"}}
 
 
-def tg(method, **params):
+def tg(method, _timeout=30, **params):
     for k, v in list(params.items()):
         if isinstance(v, (dict, list)):
             params[k] = json.dumps(v)
-    return http(f"https://api.telegram.org/bot{TOKEN}/{method}", params)
+    return http(f"https://api.telegram.org/bot{TOKEN}/{method}", params, timeout=_timeout)
 
 
 def say(text, reply_to=None, buttons=None):
@@ -123,18 +123,27 @@ REASON_BUTTONS = lambda key: [[{"text": lbl, "callback_data": f"r:{key}:{code}"}
 # ----------------------------------------------------------------------------
 # 1. Nieuwe berichten en knoppen verwerken
 # ----------------------------------------------------------------------------
-def handle_updates(st):
-    res = tg("getUpdates", offset=st.get("offset", 0), timeout=0,
-             allowed_updates=["message", "callback_query"])
+def handle_updates(st, wait=0):
+    """Haalt nieuwe berichten op. Met wait > 0 wacht Telegram tot er iets binnenkomt (meteen reageren)."""
+    try:
+        res = tg("getUpdates", _timeout=wait + 20, offset=st.get("offset", 0), timeout=wait,
+                 allowed_updates=["message", "callback_query"])
+    except Exception as e:  # noqa: BLE001
+        print("getUpdates fout:", e)
+        time.sleep(5)
+        return False
     if not res.get("ok"):
         print("getUpdates mislukt:", res)
-        return
-    for u in res.get("result", []):
+        time.sleep(5)
+        return False
+    got = res.get("result", [])
+    for u in got:
         st["offset"] = u["update_id"] + 1
         if "callback_query" in u:
             on_button(st, u["callback_query"])
         elif "message" in u:
             on_message(st, u["message"])
+    return bool(got)
 
 
 def on_message(st, m):
@@ -346,12 +355,22 @@ def main():
         return 1
     st = load()
     st.setdefault("clips", {})
-    handle_updates(st)
-    save(st)
-    post_approved(st)
-    save(st)
-    if os.getenv("GITHUB_ACTIONS"):
-        git_push("Jarvis clip-status")
+    loop_min = float(os.getenv("JARVIS_LOOP_MIN", "0") or 0)
+    end_at = time.time() + loop_min * 60
+    while True:
+        left = end_at - time.time()
+        changed = handle_updates(st, wait=int(min(50, max(0, left - 5))) if loop_min else 0)
+        if changed or not loop_min:
+            save(st)
+            post_approved(st)
+            save(st)
+            if os.getenv("GITHUB_ACTIONS"):
+                try:
+                    git_push("Jarvis clip-status")
+                except Exception as e:  # noqa: BLE001
+                    print("git push mislukt:", e)
+        if time.time() >= end_at - 6:
+            break
     wacht = sum(1 for c in st["clips"].values() if c["status"] == "wacht")
     print(f"Klaar. {wacht} clip(s) wachten op keuring.")
     return 0
